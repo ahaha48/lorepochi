@@ -3045,6 +3045,16 @@ function loadMonths() {
   if (saved) availableMonths = JSON.parse(saved);
 }
 
+// 起動時、現在の月が availableMonths に無ければ自動追加する
+function ensureCurrentMonth() {
+  const now = new Date().getMonth() + 1; // 1-12
+  if (!availableMonths.includes(now)) {
+    availableMonths.push(now);
+    availableMonths.sort((a,b)=>a-b);
+    saveMonths();
+  }
+}
+
 function saveMonths() {
   localStorage.setItem(STORAGE_KEY + '_months', JSON.stringify(availableMonths));
   // app_config は saveAll() → saveToSupabase() で一緒に保存される
@@ -3125,6 +3135,7 @@ async function initApp() {
 
   // 5. 月セレクター初期化
   loadMonths();
+  ensureCurrentMonth();
   document.getElementById('today-date').textContent = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
 
   (function patchMonthSelector() {
