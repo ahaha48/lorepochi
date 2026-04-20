@@ -1748,7 +1748,7 @@ function updateDashboardStats() {
 function renderWinners() {
   // 月タブ
   const tabs = document.getElementById('winner-tabs');
-  tabs.innerHTML = [1,2,3].map(m=>`<div class="tab ${m===curMonth?'active':''}" onclick="winnerMonthTab(${m},this)"> ${m}月</div>`).join('');
+  tabs.innerHTML = availableMonths.map(m=>`<div class="tab ${m===curMonth?'active':''}" onclick="winnerMonthTab(${m},this)"> ${m}月</div>`).join('');
 
   renderWinnersByMonth(curMonth);
 }
