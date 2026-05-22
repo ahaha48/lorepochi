@@ -39,19 +39,21 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
 .page-sub{font-size:12px;color:var(--text2);margin-top:3px;}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;}
 .card-title{font-size:12px;font-weight:500;color:var(--text3);letter-spacing:.08em;margin-bottom:12px;text-transform:uppercase;}
-.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;}
+.stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:24px;}
 .stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;position:relative;overflow:hidden;}
 .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
 .stat-card.gold::before{background:linear-gradient(90deg,var(--gold),var(--amber));}
 .stat-card.teal::before{background:linear-gradient(90deg,var(--teal),#2a9d8f);}
 .stat-card.red::before{background:linear-gradient(90deg,var(--red),#c04a5a);}
 .stat-card.blue::before{background:linear-gradient(90deg,var(--blue),#4070d0);}
+.stat-card.green::before{background:linear-gradient(90deg,var(--green),#3a9c70);}
 .stat-label{font-size:11px;color:var(--text3);letter-spacing:.06em;font-weight:500;}
 .stat-value{font-size:32px;font-weight:700;margin-top:6px;font-family:'DM Mono',monospace;letter-spacing:-.02em;}
 .stat-card.gold .stat-value{color:var(--gold2);}
 .stat-card.teal .stat-value{color:var(--teal2);}
 .stat-card.red .stat-value{color:var(--red2);}
 .stat-card.blue .stat-value{color:var(--blue2);}
+.stat-card.green .stat-value{color:var(--green);}
 .stat-delta{font-size:11px;color:var(--text3);margin-top:4px;}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px;}
@@ -517,6 +519,7 @@ select option{background:var(--bg3);}
   </div>
   <div class="stats-grid">
     <div class="stat-card gold"><div class="stat-label">総メンバー</div><div class="stat-value" id="d-total">0</div><div class="stat-delta" id="d-active-sub"></div></div>
+    <div class="stat-card green"><div class="stat-label">今週 抽選参加</div><div class="stat-value" id="d-participate">0</div><div class="stat-delta" id="d-participate-sub"></div></div>
     <div class="stat-card teal"><div class="stat-label">今週 申込完了</div><div class="stat-value" id="d-applied">0</div><div class="stat-delta" id="d-applied-sub"></div></div>
     <div class="stat-card red"><div class="stat-label">今週 当選者</div><div class="stat-value" id="d-won">0</div><div class="stat-delta" id="d-won-sub"></div></div>
     <div class="stat-card blue"><div class="stat-label">今週 報酬対象</div><div class="stat-value" id="d-reward-count">0</div><div class="stat-delta" id="d-reward-sub"></div></div>
@@ -566,7 +569,12 @@ select option{background:var(--bg3);}
   <!-- 当選者サマリー -->
   <div class="winner-panel" id="weekly-winner-panel" style="margin-bottom:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <div class="winner-panel-title" style="margin:0"><span>🏆</span>今週の当選者 <span id="winner-count-badge" class="badge badge-gold" style="margin-left:4px">0名</span></div>
+      <div class="winner-panel-title" style="margin:0">
+        <span>🏆</span>今週の当選者
+        <span id="winner-count-badge" class="badge badge-gold" style="margin-left:4px">0名</span>
+        <span style="margin-left:10px;color:var(--text3);font-size:11px;font-weight:400;">抽選参加</span>
+        <span id="participate-count-badge" class="badge badge-green" style="margin-left:4px" title="申込1件以上 または 結果SS確認済み（制限中の申込連絡を含む）">0名</span>
+      </div>
       <button class="btn btn-ghost btn-sm" onclick="showPage('winners')">全当選履歴 →</button>
     </div>
     <div class="winner-list" id="weekly-winner-list"><span class="winner-empty">まだ当選者はいません</span></div>
@@ -1215,6 +1223,18 @@ function priBadge(p, m) {
 function getWkKey(month, week, memberId) { return `${month}-${week}-${memberId}`; }
 function getWk(month, week, memberId) { return WEEKLY[getWkKey(month,week,memberId)] || {apply:null,result_ss:false,won_date:null,won_shop:null}; }
 
+// 抽選参加判定: 申込1件以上 OR 結果SS確認済み（制限中の申込連絡/結果連絡/当選も同等扱い）
+function isParticipating(month, week, memberId) {
+  const w = WEEKLY[getWkKey(month,week,memberId)];
+  if (!w) return false;
+  if ((w.apply||0) >= 1) return true;
+  if (w.result_ss === true) return true;
+  if (w.restricted_applied) return true;
+  if (w.restricted_result) return true;
+  if (w.won_date) return true;
+  return false;
+}
+
 function toast(msg, type='success') {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -1258,20 +1278,27 @@ function renderDashboard() {
   document.getElementById('d-act').textContent = active;
   document.getElementById('d-inactive').textContent = MEMBERS.filter(m=>calcPriority(m)!=='1:アクティブ').length;
 
-  let applied=0, winners=0, rewardCount=0;
+  let applied=0, winners=0, rewardCount=0, participating=0;
   MEMBERS.forEach(m=>{
     const w = getWk(curMonth, curWeek, m.id);
     const venue = parseInt(document.getElementById('venue-count')?.value||5);
     if (w.apply>=venue) applied++;
     if (w.won_date) winners++;
     if (w.result_ss && !w.won_date) rewardCount++;
+    if (isParticipating(curMonth, curWeek, m.id)) participating++;
   });
+  const activeCount = MEMBERS.filter(m=>m.priority==='1:アクティブ').length;
   document.getElementById('d-applied').textContent = applied;
-  document.getElementById('d-applied-sub').textContent = `稼働率 ${MEMBERS.filter(m=>m.priority==='1:アクティブ').length?Math.round(applied/MEMBERS.filter(m=>m.priority==='1:アクティブ').length*100):0}%`;
+  document.getElementById('d-applied-sub').textContent = `稼働率 ${activeCount?Math.round(applied/activeCount*100):0}%`;
   document.getElementById('d-won').textContent = winners;
   document.getElementById('d-won-sub').textContent = `累計: ${WIN_HISTORY.length} 件`;
   document.getElementById('d-reward-count').textContent = rewardCount;
   document.getElementById('d-reward-sub').textContent = `¥${(rewardCount*1000).toLocaleString()}`;
+  const partEl = document.getElementById('d-participate');
+  if (partEl) {
+    partEl.textContent = participating;
+    document.getElementById('d-participate-sub').textContent = `参加率 ${activeCount?Math.round(participating/activeCount*100):0}%（申込1件以上 or 結果SS）`;
+  }
 
   const bars = document.getElementById('d-progress-bars');
   const steps = [
@@ -1317,6 +1344,12 @@ function renderWeekly() {
   renderWinnerChips('weekly-winner-list');
   const wc = WIN_HISTORY.filter(w=>w.month===curMonth&&w.week===curWeek).length;
   document.getElementById('winner-count-badge').textContent = `${wc}名`;
+
+  const partBadge = document.getElementById('participate-count-badge');
+  if (partBadge) {
+    const pc = MEMBERS.filter(m=>isParticipating(curMonth, curWeek, m.id)).length;
+    partBadge.textContent = `${pc}名`;
+  }
 
   buildWeeklyRows();
 }
@@ -1619,6 +1652,7 @@ function setRestrictedApplied(memberId, val) {
     toast('✓ 申込連絡を記録しました');
   }
   buildWeeklyRows();
+  updateDashboardStats();
   saveAll();
 }
 
@@ -1740,6 +1774,11 @@ function clearWon(memberId) {
 
 function updateDashboardStats() {
   if (document.getElementById('page-dashboard').classList.contains('active')) renderDashboard();
+  const partBadge = document.getElementById('participate-count-badge');
+  if (partBadge && document.getElementById('page-weekly').classList.contains('active')) {
+    const pc = MEMBERS.filter(m=>isParticipating(curMonth, curWeek, m.id)).length;
+    partBadge.textContent = `${pc}名`;
+  }
 }
 
 // ================================================================
