@@ -1,0 +1,26 @@
+# メンバーデータ・バックアップ（個人情報を含むため絶対にコミットしない）
+lorepochi_backup_*.json
+backup_*.json
+
+# 旧バージョン（メンバーデータが埋め込まれている可能性）
+lorepochi_v5.html
+
+# シークレット
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node
+node_modules/
+npm-debug.log*
