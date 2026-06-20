@@ -40,6 +40,7 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;}
 .card-title{font-size:12px;font-weight:500;color:var(--text3);letter-spacing:.08em;margin-bottom:12px;text-transform:uppercase;}
 .stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:24px;}
+.stats-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;}
 .stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;position:relative;overflow:hidden;}
 .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
 .stat-card.gold::before{background:linear-gradient(90deg,var(--gold),var(--amber));}
@@ -429,7 +430,7 @@ select option{background:var(--bg3);}
 .week-box-won { font-size:10px;color:var(--gold);margin-top:4px; }
 .week-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;}
 
-@media(max-width:1100px){.stats-grid{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}}
+@media(max-width:1100px){.stats-grid{grid-template-columns:repeat(2,1fr)}.stats-grid4{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}}
 @media(max-width:768px){.sidebar{width:60px;min-width:60px}.sidebar-logo,.nav-section,.nav-item span,.sidebar-footer,.logo-sub{display:none}.nav-item{justify-content:center;padding:12px}.main{margin-left:60px;padding:16px}}
 
 /* スクロールして上に固定するヘッダー */
@@ -523,6 +524,13 @@ select option{background:var(--bg3);}
     <div class="stat-card teal"><div class="stat-label">今週 申込完了</div><div class="stat-value" id="d-applied">0</div><div class="stat-delta" id="d-applied-sub"></div></div>
     <div class="stat-card red"><div class="stat-label">今週 当選者</div><div class="stat-value" id="d-won">0</div><div class="stat-delta" id="d-won-sub"></div></div>
     <div class="stat-card blue"><div class="stat-label">今週 報酬対象</div><div class="stat-value" id="d-reward-count">0</div><div class="stat-delta" id="d-reward-sub"></div></div>
+  </div>
+  <div style="font-size:12px;color:var(--text2);font-weight:500;margin:-8px 2px 12px;">📊 今週のうごき</div>
+  <div class="stats-grid4">
+    <div class="stat-card teal"><div class="stat-label">📨 今週の応募者数</div><div class="stat-value" id="d-applicants">0</div><div class="stat-delta" id="d-applicants-sub"></div></div>
+    <div class="stat-card blue"><div class="stat-label">📈 応募者 前週比</div><div class="stat-value" id="d-apdelta">—</div><div class="stat-delta" id="d-apdelta-sub"></div></div>
+    <div class="stat-card gold"><div class="stat-label">📋 先週の結果報告数</div><div class="stat-value" id="d-prevresult">—</div><div class="stat-delta" id="d-prevresult-sub"></div></div>
+    <div class="stat-card red"><div class="stat-label">🏆 今週の当選者数</div><div class="stat-value" id="d-weekwon">0</div><div class="stat-delta" id="d-weekwon-sub"></div></div>
   </div>
   <div class="two-col">
     <div class="card">
@@ -1235,6 +1243,11 @@ function isParticipating(month, week, memberId) {
   return false;
 }
 
+// 週次集計（応募者数＝申込1件以上 or 申込連絡 / 結果報告数＝結果SS or 結果連絡）
+function countApplicants(mo,wk){ return MEMBERS.filter(m=>{ const w=getWk(mo,wk,m.id); return (w.apply!=null&&w.apply>=1)||!!w.restricted_applied; }).length; }
+function countResultReports(mo,wk){ return MEMBERS.filter(m=>{ const w=getWk(mo,wk,m.id); return w.result_ss===true||!!w.restricted_result; }).length; }
+function prevWeekOf(mo,wk){ const cur=mo*10+wk; let best=null; Object.keys(WEEKLY).forEach(k=>{ const p=k.split('-'); if(p.length<3) return; const idx=parseInt(p[0])*10+parseInt(p[1]); if(idx<cur&&(best===null||idx>best)) best=idx; }); return best===null?null:{mo:Math.floor(best/10),wk:best%10}; }
+
 function toast(msg, type='success') {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -1299,6 +1312,20 @@ function renderDashboard() {
     partEl.textContent = participating;
     document.getElementById('d-participate-sub').textContent = `参加率 ${activeCount?Math.round(participating/activeCount*100):0}%（申込1件以上 or 結果SS）`;
   }
+
+  // 今週のうごき（応募者数／前週比／先週の結果報告数／今週の当選者数）
+  const apCur=countApplicants(curMonth,curWeek);
+  const prevW=prevWeekOf(curMonth,curWeek);
+  const apPrev=prevW?countApplicants(prevW.mo,prevW.wk):null;
+  const rrPrev=prevW?countResultReports(prevW.mo,prevW.wk):null;
+  const dlt=apPrev!=null?apCur-apPrev:null;
+  const setT=(id,v)=>{const e=document.getElementById(id); if(e) e.textContent=v;};
+  setT('d-applicants',apCur); setT('d-applicants-sub',`${curMonth}月 第${curWeek}週`);
+  const dEl=document.getElementById('d-apdelta');
+  if(dEl) dEl.innerHTML = dlt==null?'—':(dlt>0?`<span style="color:var(--green)">▲+${dlt}</span>`:dlt<0?`<span style="color:var(--red2)">▼${dlt}</span>`:'±0');
+  setT('d-apdelta-sub', prevW?`前週(${prevW.mo}/${prevW.wk}) ${apPrev}名 → 今週 ${apCur}名`:'前週データなし');
+  setT('d-prevresult', rrPrev==null?'—':rrPrev); setT('d-prevresult-sub', prevW?`${prevW.mo}月 第${prevW.wk}週`:'前週データなし');
+  setT('d-weekwon', winners); setT('d-weekwon-sub', `累計 ${WIN_HISTORY.length} 件`);
 
   const bars = document.getElementById('d-progress-bars');
   const steps = [
