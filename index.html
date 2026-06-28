@@ -2945,9 +2945,31 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 let supabaseClient = null;
 
+// ===== バージョンガード（古いタブが新版デプロイ後に上書きするのを防ぐ＝楽観ロック）=====
+const APP_VERSION = 20260628; // デプロイのたびに増やす
+let staleCode = false;
+function showStaleBanner(){
+  if(document.getElementById('stale-banner')) return;
+  const d=document.createElement('div'); d.id='stale-banner';
+  d.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#c0392b;color:#fff;padding:12px 14px;text-align:center;font-weight:700;font-size:14px;box-shadow:0 2px 10px rgba(0,0,0,.35)';
+  d.innerHTML='⚠ 新しいバージョンが公開されています。このタブは古いため、データを守るために保存を停止しました。 <button onclick="location.reload()" style="margin-left:8px;padding:5px 14px;border:none;border-radius:6px;background:#fff;color:#c0392b;font-weight:700;cursor:pointer">今すぐ再読み込み</button>';
+  document.body.appendChild(d);
+}
+async function checkGuard(){
+  if(!supabaseClient) return;
+  try{
+    const {data,error}=await supabaseClient.from('app_config').select('cur_month').eq('key','__guard__').maybeSingle();
+    if(error) return; // 通信エラー時はブロックしない
+    const dbv=(data&&data.cur_month)||0;
+    if(dbv>APP_VERSION){ staleCode=true; showStaleBanner(); }
+    else if(dbv<APP_VERSION){ await supabaseClient.from('app_config').upsert({key:'__guard__',cur_month:APP_VERSION},{onConflict:'key'}); }
+  }catch(e){}
+}
+
 // --- Supabase: 全データ保存 ---
 async function saveToSupabase() {
   if (!supabaseClient) return;
+  if (staleCode) { showStaleBanner(); return; } // 古いタブは保存しない（上書き事故防止）
   try {
     // members
     if (MEMBERS.length > 0) {
@@ -3236,6 +3258,9 @@ async function initApp() {
 
   // 9. 自動バックアップ開始
   setupAutoBackup();
+
+  // 10. バージョンガード（古いタブの上書き防止）
+  checkGuard(); setInterval(checkGuard, 30000);
 }
 
 // アプリ起動
