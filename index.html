@@ -1246,7 +1246,8 @@ function isParticipating(month, week, memberId) {
 // 週次集計（応募者数＝申込1件以上 or 申込連絡 / 結果報告数＝結果SS or 結果連絡）
 function countApplicants(mo,wk){ return MEMBERS.filter(m=>{ const w=getWk(mo,wk,m.id); return (w.apply!=null&&w.apply>=1)||!!w.restricted_applied; }).length; }
 function countResultReports(mo,wk){ return MEMBERS.filter(m=>{ const w=getWk(mo,wk,m.id); return w.result_ss===true||!!w.restricted_result; }).length; }
-function prevWeekOf(mo,wk){ const cur=mo*10+wk; let best=null; Object.keys(WEEKLY).forEach(k=>{ const p=k.split('-'); if(p.length<3) return; const idx=parseInt(p[0])*10+parseInt(p[1]); if(idx<cur&&(best===null||idx>best)) best=idx; }); return best===null?null:{mo:Math.floor(best/10),wk:best%10}; }
+// 「前週」＝申込者がいた直近の過去週（空の週は自動スキップ。例: 7月1週で6月5週が空なら6月4週と比較）
+function prevWeekOf(mo,wk){ const cur=mo*10+wk; const weeks=new Set(); Object.keys(WEEKLY).forEach(k=>{ const p=k.split('-'); if(p.length<3) return; const v=WEEKLY[k]; if(!v) return; if((v.apply!=null&&v.apply>=1)||v.restricted_applied) weeks.add(parseInt(p[0])*10+parseInt(p[1])); }); let best=null; weeks.forEach(idx=>{ if(idx<cur&&(best===null||idx>best)) best=idx; }); return best===null?null:{mo:Math.floor(best/10),wk:best%10}; }
 
 function toast(msg, type='success') {
   const t = document.getElementById('toast');
@@ -2946,7 +2947,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 let supabaseClient = null;
 
 // ===== バージョンガード（古いタブが新版デプロイ後に上書きするのを防ぐ＝楽観ロック）=====
-const APP_VERSION = 20260628; // デプロイのたびに増やす
+const APP_VERSION = 20260629; // デプロイのたびに増やす
 let staleCode = false;
 function showStaleBanner(){
   if(document.getElementById('stale-banner')) return;
