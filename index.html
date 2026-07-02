@@ -2567,6 +2567,10 @@ function hasAnyApplyHistory(memberId) {
 // ・過去データの won欄（履歴に無い当選）… 成功とみなす
 // ・店舗買付は「成功」のみ入手扱い（キャンセル/失敗は除外）
 // ・「購入なし」フラグの会員は入手なし（制限なし・報酬継続）
+// 各要素:
+//   rst    = 制限の起算日（来店予定日 or 当選日 / 店舗買付日）… 購入制限の判定に使用
+//   rwdOrd = 当選した週の序数（月*100+週）… 報酬判定に使用（抽選当選のみ）。無ければ null
+//   rwdDate= 報酬停止の基準日… 週が不明な入手（店舗買付・履歴に無いwon欄）に使用
 function acquisitionsOf(m) {
   if (!m || m.no_purchase) return [];
   const clean = x => { const d = String(x||'').replace(/[^0-9]/g,'').slice(0,8); return d.length === 8 ? d : null; };
@@ -2577,36 +2581,32 @@ function acquisitionsOf(m) {
     const wd = clean(w.won_date);
     if (wd) histWon.add(wd);                 // fail除外より前に登録（失敗当選をwon欄経由で入手扱いに復活させない）
     if (PURCHASE[idx] && PURCHASE[idx].result === 'fail') return; // 買い付け失敗と明記された当選は入手にしない
-    if (!wd) return;
-    const vd = clean(w.visit_date);
-    acc.push({ rst: vd || wd, rwd: wd });
+    const mo = parseInt(w.month), wk = parseInt(w.week);
+    const ord = (!isNaN(mo) && !isNaN(wk)) ? mo * 100 + wk : null;
+    const rst = clean(w.visit_date) || wd;   // 制限起算＝来店予定日 or 当選日
+    if (!rst && ord == null) return;
+    acc.push({ rst: rst, rwdOrd: ord, rwdDate: (ord == null ? wd : null) });
   });
   [m.won1, m.won2, m.won3].forEach(x => {
     const wd = clean(x);
-    if (wd && !histWon.has(wd)) acc.push({ rst: wd, rwd: wd });
+    if (wd && !histWon.has(wd)) acc.push({ rst: wd, rwdOrd: null, rwdDate: wd });
   });
   STORE_PURCHASES.forEach(p => {
     if (p.member_id !== m.id && p.line_name !== m.line_name) return;
     if (p.result !== 'success') return;       // 店舗買付は成功のみ入手扱い
     const pd = clean(p.purchase_date);
-    if (pd) acc.push({ rst: pd, rwd: pd });
+    if (pd) acc.push({ rst: pd, rwdOrd: null, rwdDate: pd });
   });
   const spd = clean(m.store_purchase_date);   // 店舗買付成功時に設定される
-  if (spd) acc.push({ rst: spd, rwd: spd });
+  if (spd) acc.push({ rst: spd, rwdOrd: null, rwdDate: spd });
   return acc;
-}
-
-// 報酬が止まる日（最も早い入手日）。入手なしなら null（＝報酬継続）
-function rewardStopDate(m) {
-  const acc = acquisitionsOf(m);
-  return acc.length ? acc.map(a => a.rwd).sort()[0] : null;
 }
 
 function getMonthlyRewardCount(memberId, month) {
   const m = MEMBERS.find(mm => mm.id === memberId);
   if (!m) return 0;
-  // 入手した日（当選日/店舗買付日）以降の週は報酬なし。入手なし（未当選/買付失敗/購入なし）は全参加週が対象
-  const stop = rewardStopDate(m);
+  const acc = acquisitionsOf(m);
+  // 報酬は「入手した週より前の週」のみ。抽選当選は週の序数で厳密比較（第3週当選→第1・2週は対象）
   let count = 0;
   Object.keys(WEEKLY).forEach(key => {
     const parts = key.split('-');
@@ -2616,10 +2616,14 @@ function getMonthlyRewardCount(memberId, month) {
     if (parseInt(parts[2]) !== memberId) return;
     const w = WEEKLY[key];
     if (!(w && w.result_ss && !w.won_date)) return;
-    if (stop) {
-      const wed = getSelectedWeekWednesday(mo, wk);
-      if (wed && wed >= stop) return;
-    }
+    const ord = mo * 100 + wk;
+    let wed = null;
+    const blocked = acc.some(a => {
+      if (a.rwdOrd != null) return ord >= a.rwdOrd;                 // 当選週以降は除外
+      if (a.rwdDate) { if (wed === null) wed = getSelectedWeekWednesday(mo, wk); return wed && wed >= a.rwdDate; }
+      return false;
+    });
+    if (blocked) return;
     count++;
   });
   return count;
@@ -2651,9 +2655,9 @@ function calcPriority(m) {
 // 起算日 = 最も新しい入手の「来店予定日 or 当選日 / 店舗買付日」。そこから180日。
 // → 当選するたびに（最新の起算日から）180日リセットされる
 function restrictionEndDate(m) {
-  const acc = acquisitionsOf(m);
-  if (!acc.length) return null;
-  const base = acc.map(a => a.rst).sort().slice(-1)[0]; // 最新の起算日
+  const bases = acquisitionsOf(m).map(a => a.rst).filter(Boolean);
+  if (!bases.length) return null;
+  const base = bases.sort().slice(-1)[0]; // 最新の起算日
   const d = parseDateStr(base);
   if (!d) return null;
   const end = new Date(d);
@@ -3101,6 +3105,33 @@ function reconcileWinHistory(){
   });
 }
 
+// 週次入力（真実のデータ）から、各メンバーの当選欄(won1/2/3)・ステータスを復元する。
+// 既存の当選は消さずマージ（過去データの取りこぼし防止）。同行補助の当選も回数に数える。
+// 変更のあったメンバー配列を返す（呼び出し側でSupabaseに保存）。冪等：再実行しても差分が出れば安定する。
+function reconcileMemberWins(){
+  const changed=[];
+  MEMBERS.forEach(m=>{
+    const dates=new Set();
+    [m.won1,m.won2,m.won3].forEach(x=>{ const d=String(x||'').replace(/[^0-9]/g,'').slice(0,8); if(d.length===8) dates.add(d); });
+    Object.keys(WEEKLY).forEach(key=>{
+      const p=key.split('-'); if(p.length<3) return;
+      if(parseInt(p[2])!==m.id) return;
+      const w=WEEKLY[key];
+      const d=w&&w.won_date?String(w.won_date).replace(/[^0-9]/g,'').slice(0,8):'';
+      if(d.length===8) dates.add(d);
+    });
+    const s=[...dates].sort();
+    const w1=s[0]||null, w2=s[1]||null, w3=s[2]||null, cnt=s.length;
+    let status=m.status;
+    if(cnt>=3) status='3回当選済'; else if(cnt===2) status='2回当選済'; else if(cnt===1) status='1回当選済';
+    if(m.won1!==w1 || m.won2!==w2 || m.won3!==w3 || (cnt>0 && m.status!==status)){
+      m.won1=w1; m.won2=w2; m.won3=w3; if(cnt>0) m.status=status;
+      changed.push(m);
+    }
+  });
+  return changed;
+}
+
 // 全件をページ分割で取得（Supabaseは1回最大1000件）
 async function sbFetchAll(table, orderCols){
   const out=[]; const size=1000; let from=0;
@@ -3292,6 +3323,13 @@ async function loadFromSupabase() {
       if (config.available_months) availableMonths = config.available_months;
     }
     reconcileWinHistory(); // 当選履歴が週次より欠けていれば補完（表示を即修復）
+    const _chgWins = reconcileMemberWins(); // メンバーの当選欄・ステータスを週次から復元
+    if (_chgWins.length && supabaseClient && !staleCode) {
+      pendingSaves++;
+      supabaseClient.from('members').upsert(_chgWins, { onConflict: 'id' })
+        .then(({error}) => { if (error) console.warn('当選欄復元の保存エラー', error); })
+        .finally(() => { pendingSaves = Math.max(0, pendingSaves-1); lastLocalEdit = Date.now(); });
+    }
     return true;
   } catch (err) {
     console.warn('Supabase読み込みエラー:', err);
