@@ -769,7 +769,7 @@ select option{background:var(--bg3);}
       <div class="chip" style="color:var(--amber);" onclick="applyPreset(this,'restriction')">制限中（全員）</div>
       <div class="chip" style="color:var(--teal2);" onclick="applyPreset(this,'restricted_active')">制限中 × アクティブ</div>
       <div class="chip" onclick="applyPreset(this,'restricted_inactive')">制限中 × 非アクティブ</div>
-      <div class="chip" style="color:var(--green);" onclick="applyPreset(this,'restriction_ended')">✅ 制限明け（半年経過）</div>
+      <div class="chip" style="color:var(--green);" onclick="applyPreset(this,'restriction_ended')">✅ 制限明け（180日経過）</div>
       <div class="chip" style="border-color:rgba(144,144,168,0.5);" onclick="applyPreset(this,'no_last_active')">最終活動日なし</div>
       <div class="chip" onclick="applyPreset(this,'has_last_active')">最終活動日あり</div>
     </div>
@@ -806,7 +806,7 @@ select option{background:var(--bg3);}
         <select id="sf-restriction" onchange="runSegment()" style="width:100%">
           <option value="">すべて</option>
           <option value="restricted">制限中のみ</option>
-          <option value="ended">制限明けのみ（半年経過）</option>
+          <option value="ended">制限明けのみ（180日経過）</option>
           <option value="free">制限なしのみ</option>
         </select>
       </div>
@@ -878,7 +878,7 @@ select option{background:var(--bg3);}
   <!-- 購入制限中メンバー -->
   <div class="card" style="margin-bottom:20px" id="restriction-panel">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-      <div class="card-title" style="margin:0">⏳ 購入制限中メンバー（6ヶ月ルール）</div>
+      <div class="card-title" style="margin:0">⏳ 購入制限中メンバー（180日ルール）</div>
       <span id="restriction-count" class="badge badge-orange">0名</span>
     </div>
     <div id="restriction-list" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
@@ -902,7 +902,7 @@ select option{background:var(--bg3);}
         <button class="btn btn-primary btn-sm" onclick="openStorePurchaseModal()">＋ 新規登録</button>
       </div>
       <div style="font-size:12px;color:var(--text3);margin-bottom:12px;padding:8px 12px;background:var(--bg3);border-radius:6px;">
-        💡 抽選を経由しない店舗での直接買付（店頭購入・同行補助など）を記録します。買付成功日から6ヶ月間の購入制限が開始されます。
+        💡 抽選を経由しない店舗での直接買付（店頭購入・同行補助など）を記録します。買付成功日から180日間の購入制限が開始されます。
       </div>
       <div class="table-wrap">
         <table>
@@ -1001,7 +1001,7 @@ select option{background:var(--bg3);}
   <div class="modal" style="width:500px">
     <div class="modal-title">店舗買付を登録</div>
     <div style="font-size:12px;color:var(--text3);margin-bottom:16px;padding:8px 12px;background:var(--bg3);border-radius:6px;">
-      抽選を経由しない店舗での直接買付を記録します。成功の場合、買付日から6ヶ月の購入制限が始まります。
+      抽選を経由しない店舗での直接買付を記録します。成功の場合、買付日から180日の購入制限が始まります。
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
       <div class="form-row">
@@ -2053,7 +2053,7 @@ const SEG_PRESETS = {
                       customFn: m=>isRestricted(m) && calcPriority(m)==='1:アクティブ'},
   restricted_inactive:{label:'制限中 × 非アクティブ（連絡なし）',
                       customFn: m=>isRestricted(m) && calcPriority(m)!=='1:アクティブ'},
-  restriction_ended: {label:'制限明け（半年経過）',
+  restriction_ended: {label:'制限明け（180日経過）',
                       customFn: m=>isRestrictionEnded(m)},
   // 最終活動日ベース
   no_last_active:    {label:'最終活動日なし（引き継ぎ前・未確認）',
@@ -2559,21 +2559,54 @@ function hasAnyApplyHistory(memberId) {
   });
 }
 
-// メンバーの最初の当選日（YYYYMMDD）を返す。当選歴が無ければ null
-function earliestWonDate(m) {
-  const ds = [m.won1, m.won2, m.won3]
-    .filter(Boolean)
-    .map(x => String(x).replace(/[^0-9]/g,'').slice(0,8))
-    .filter(x => x.length === 8);
-  return ds.length ? ds.sort()[0] : null;
+// ===== 入手（買い付け成功）判定の共通ロジック =====
+// 会員が「ロレックスを入手した」記録の一覧を返す。各要素 {rst, rwd}:
+//   rst = 制限の起算日（来店予定日 or 当選日 / 店舗買付日）
+//   rwd = 報酬停止日（当選日 / 店舗買付日）
+// ・当選（WIN_HISTORY。2回目・同行補助の当選も含む）で「買い付け失敗」と明記されていないもの
+// ・過去データの won欄（履歴に無い当選）… 成功とみなす
+// ・店舗買付は「成功」のみ入手扱い（キャンセル/失敗は除外）
+// ・「購入なし」フラグの会員は入手なし（制限なし・報酬継続）
+function acquisitionsOf(m) {
+  if (!m || m.no_purchase) return [];
+  const clean = x => { const d = String(x||'').replace(/[^0-9]/g,'').slice(0,8); return d.length === 8 ? d : null; };
+  const acc = [];
+  const histWon = new Set();
+  WIN_HISTORY.forEach((w, idx) => {
+    if (w.member_id !== m.id) return;
+    const wd = clean(w.won_date);
+    if (wd) histWon.add(wd);                 // fail除外より前に登録（失敗当選をwon欄経由で入手扱いに復活させない）
+    if (PURCHASE[idx] && PURCHASE[idx].result === 'fail') return; // 買い付け失敗と明記された当選は入手にしない
+    if (!wd) return;
+    const vd = clean(w.visit_date);
+    acc.push({ rst: vd || wd, rwd: wd });
+  });
+  [m.won1, m.won2, m.won3].forEach(x => {
+    const wd = clean(x);
+    if (wd && !histWon.has(wd)) acc.push({ rst: wd, rwd: wd });
+  });
+  STORE_PURCHASES.forEach(p => {
+    if (p.member_id !== m.id && p.line_name !== m.line_name) return;
+    if (p.result !== 'success') return;       // 店舗買付は成功のみ入手扱い
+    const pd = clean(p.purchase_date);
+    if (pd) acc.push({ rst: pd, rwd: pd });
+  });
+  const spd = clean(m.store_purchase_date);   // 店舗買付成功時に設定される
+  if (spd) acc.push({ rst: spd, rwd: spd });
+  return acc;
+}
+
+// 報酬が止まる日（最も早い入手日）。入手なしなら null（＝報酬継続）
+function rewardStopDate(m) {
+  const acc = acquisitionsOf(m);
+  return acc.length ? acc.map(a => a.rwd).sort()[0] : null;
 }
 
 function getMonthlyRewardCount(memberId, month) {
   const m = MEMBERS.find(mm => mm.id === memberId);
   if (!m) return 0;
-  // 一度でも当選した人は、最初の当選日以降の週は報酬なし（当選前の週のみ報酬）
-  // ただし「購入なし（当選したが買えなかった）」の人は当選後も報酬継続（firstWin=null）
-  const firstWin = m.no_purchase ? null : earliestWonDate(m);
+  // 入手した日（当選日/店舗買付日）以降の週は報酬なし。入手なし（未当選/買付失敗/購入なし）は全参加週が対象
+  const stop = rewardStopDate(m);
   let count = 0;
   Object.keys(WEEKLY).forEach(key => {
     const parts = key.split('-');
@@ -2583,10 +2616,9 @@ function getMonthlyRewardCount(memberId, month) {
     if (parseInt(parts[2]) !== memberId) return;
     const w = WEEKLY[key];
     if (!(w && w.result_ss && !w.won_date)) return;
-    // 当選日以降の週は除外（その週の水曜日が最初の当選日以降なら報酬なし）
-    if (firstWin) {
+    if (stop) {
       const wed = getSelectedWeekWednesday(mo, wk);
-      if (wed && wed >= firstWin) return;
+      if (wed && wed >= stop) return;
     }
     count++;
   });
@@ -2615,62 +2647,29 @@ function calcPriority(m) {
   return m.status === '未当選' ? '3:非アクティブ(未当選)' : '2:非アクティブ(当選済)';
 }
 
+// 購入制限の解除日（Dateオブジェクト）。入手なしなら null
+// 起算日 = 最も新しい入手の「来店予定日 or 当選日 / 店舗買付日」。そこから180日。
+// → 当選するたびに（最新の起算日から）180日リセットされる
+function restrictionEndDate(m) {
+  const acc = acquisitionsOf(m);
+  if (!acc.length) return null;
+  const base = acc.map(a => a.rst).sort().slice(-1)[0]; // 最新の起算日
+  const d = parseDateStr(base);
+  if (!d) return null;
+  const end = new Date(d);
+  end.setDate(end.getDate() + 180); // 180日ルール
+  return end;
+}
+
 function isRestricted(m) {
-  // 「買付成功日」から6ヶ月以内かどうかで判定
-  // 買付成功日 = WIN_HISTORY + PURCHASE[].result==='success' の purchase_date
-  // または m.store_purchase_date（店舗周り組の直接買付日）
-  const d = parseDateStr(getLastPurchaseSuccessDate(m));
-  if (!d) return false;
-  const release = new Date(d);
-  release.setMonth(release.getMonth() + 6);
-  return new Date() < release;
+  const end = restrictionEndDate(m);
+  return end ? new Date() < end : false;
 }
 
-// 制限明け判定：買付/当選から6ヶ月の解除日を過ぎている（＝過去に制限対象で、いま半年経過済み）
-// 買付・当選の履歴が無い人／購入なしフラグの人は false（そもそも制限対象外）＝ isRestricted の補集合
+// 制限明け判定：入手（当選/店舗買付）から180日を過ぎている（＝ isRestricted の補集合）
 function isRestrictionEnded(m) {
-  const d = parseDateStr(getLastPurchaseSuccessDate(m));
-  if (!d) return false;
-  const release = new Date(d);
-  release.setMonth(release.getMonth() + 6);
-  return new Date() >= release;
-}
-
-function getLastPurchaseSuccessDate(m) {
-  let latest = null;
-  // 1. WIN_HISTORY + PURCHASE から買付成功日を取得
-  WIN_HISTORY.forEach((w, idx) => {
-    if (w.member_id !== m.id) return;
-    const p = PURCHASE[idx];
-    if (p && p.result === 'success' && p.purchase_date) {
-      const d = p.purchase_date.replace(/[^0-9]/g,'');
-      if (!latest || d > latest) latest = d;
-    }
-  });
-  // 2. STORE_PURCHASES（店舗買付記録）から取得
-  STORE_PURCHASES.forEach(p => {
-    if (p.member_id !== m.id && p.line_name !== m.line_name) return;
-    if (p.result === 'success' && p.purchase_date) {
-      const d = String(p.purchase_date).replace(/[^0-9]/g,'');
-      if (!latest || d > latest) latest = d;
-    }
-  });
-  // 3. store_purchase_date（メンバー編集から直接設定）
-  if (m.store_purchase_date) {
-    const d = String(m.store_purchase_date).replace(/[^0-9]/g,'');
-    if (!latest || d > latest) latest = d;
-  }
-  // 4. 「購入なし」フラグが立っている場合は制限なし
-  if (m.no_purchase) return null;
-  // 5. 当選日も制限の起算日として考慮する（購入成功日と当選日のうち最も新しい日を採用）
-  // 購入記録が古くても、より新しい当選があればそれを起算日にする
-  // 例：1回目の当選で購入後、2回目の当選で6ヶ月制限がリセットされるケース
-  [m.won1, m.won2, m.won3].forEach(x => {
-    if (!x) return;
-    const d = String(x).replace(/[^0-9]/g,'').slice(0,8);
-    if (d.length === 8 && (!latest || d > latest)) latest = d;
-  });
-  return latest;
+  const end = restrictionEndDate(m);
+  return end ? new Date() >= end : false;
 }
 
 function getLastPurchaseDate(memberId) {
@@ -2688,23 +2687,15 @@ function getLastPurchaseDate(memberId) {
 
 function getRestrictionReleaseDate(memberId) {
   const m = MEMBERS.find(m=>m.id===memberId);
-  if (!m) return null;
-  const d = parseDateStr(getLastPurchaseSuccessDate(m));
-  if (!d) return null;
-  const rel = new Date(d);
-  rel.setMonth(rel.getMonth() + 6);
-  return fmtDateObj(rel);
+  const end = m ? restrictionEndDate(m) : null;
+  return end ? fmtDateObj(end) : null;
 }
 
 function getRestrictionDaysLeft(memberId) {
   const m = MEMBERS.find(m=>m.id===memberId);
-  if (!m) return 0;
-  const d = parseDateStr(getLastPurchaseSuccessDate(m));
-  if (!d) return 0;
-  const rel = new Date(d);
-  rel.setMonth(rel.getMonth() + 6);
-  const diff = rel - new Date();
-  return Math.max(0, Math.ceil(diff / 86400000));
+  const end = m ? restrictionEndDate(m) : null;
+  if (!end) return 0;
+  return Math.max(0, Math.ceil((end - new Date()) / 86400000));
 }
 
 function parseDateStr(s) {
@@ -2935,7 +2926,7 @@ function savePurchase(idx) {
         if (!m.store_purchase_date || pd > String(m.store_purchase_date).replace(/[^0-9]/g,'')) {
           m.store_purchase_date = pd;
         }
-        toast(`✓ 買付成功を登録 → ${m.name||m.line_name} の購入制限が開始されます（${fmtDate(pd)}〜6ヶ月）`, 'gold');
+        toast(`✓ 買付成功を登録 → ${m.name||m.line_name} の購入制限が開始されます（${fmtDate(pd)}〜180日）`, 'gold');
       }
     }
   }
