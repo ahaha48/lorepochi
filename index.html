@@ -696,9 +696,33 @@ select option{background:var(--bg3);}
 <!-- ===== REWARD ===== -->
 <section class="page-section" id="page-reward">
   <div class="page-header">
-    <div><div class="page-title">報酬管理</div><div class="page-sub">今週の報酬対象者</div></div>
+    <div><div class="page-title">報酬管理</div><div class="page-sub">月間の報酬集計 ／ 今週の報酬対象者</div></div>
     <button class="btn btn-primary" onclick="exportRewardCSV()">📥 支払一覧CSV</button>
   </div>
+
+  <!-- ===== 月間報酬集計（月を選ぶとその月の合計が出る） ===== -->
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="card-title" style="margin:0">📅 月間報酬集計</div>
+        <select id="r-month" onchange="renderRewardMonthly()" style="width:110px"></select>
+      </div>
+      <button class="btn btn-primary" onclick="exportRewardMonthlyCSV()">📥 月間CSV</button>
+    </div>
+    <div class="three-col" style="margin-bottom:14px">
+      <div class="stat-card gold" style="padding:16px"><div class="stat-label">選択月 報酬人数</div><div class="stat-value" style="font-size:24px" id="rm-people">0</div><div class="stat-delta">人</div></div>
+      <div class="stat-card teal" style="padding:16px"><div class="stat-label">選択月 のべ報酬回数</div><div class="stat-value" style="font-size:24px" id="rm-count">0</div><div class="stat-delta">回 × ¥1,000</div></div>
+      <div class="stat-card blue" style="padding:16px"><div class="stat-label">選択月 報酬合計</div><div class="stat-value" style="font-size:24px" id="rm-total">¥0</div><div class="stat-delta">当選前の週も含む</div></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>LINE名</th><th>氏名</th><th>ステータス</th><th>対象回数</th><th>金額</th></tr></thead>
+        <tbody id="rm-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="page-sub" style="margin:0 0 8px 2px;font-weight:600;">今週の報酬対象者</div>
   <div class="three-col">
     <div class="stat-card gold" style="padding:16px"><div class="stat-label">今週 報酬対象</div><div class="stat-value" style="font-size:24px" id="r-count">0</div><div class="stat-delta">¥1,000 × 対象者数</div></div>
     <div class="stat-card teal" style="padding:16px"><div class="stat-label">今週 報酬合計</div><div class="stat-value" style="font-size:24px" id="r-total">¥0</div><div class="stat-delta">未払いのみ</div></div>
@@ -745,6 +769,7 @@ select option{background:var(--bg3);}
       <div class="chip" style="color:var(--amber);" onclick="applyPreset(this,'restriction')">制限中（全員）</div>
       <div class="chip" style="color:var(--teal2);" onclick="applyPreset(this,'restricted_active')">制限中 × アクティブ</div>
       <div class="chip" onclick="applyPreset(this,'restricted_inactive')">制限中 × 非アクティブ</div>
+      <div class="chip" style="color:var(--green);" onclick="applyPreset(this,'restriction_ended')">✅ 制限明け（半年経過）</div>
       <div class="chip" style="border-color:rgba(144,144,168,0.5);" onclick="applyPreset(this,'no_last_active')">最終活動日なし</div>
       <div class="chip" onclick="applyPreset(this,'has_last_active')">最終活動日あり</div>
     </div>
@@ -781,6 +806,7 @@ select option{background:var(--bg3);}
         <select id="sf-restriction" onchange="runSegment()" style="width:100%">
           <option value="">すべて</option>
           <option value="restricted">制限中のみ</option>
+          <option value="ended">制限明けのみ（半年経過）</option>
           <option value="free">制限なしのみ</option>
         </select>
       </div>
@@ -1271,7 +1297,7 @@ function showPage(id) {
   if (id==='weekly') renderWeekly();
   if (id==='members') renderMembers();
   if (id==='winners') renderWinners();
-  if (id==='reward') renderReward();
+  if (id==='reward') { renderReward(); updateRewardMonthSelector(); renderRewardMonthly(); }
   if (id==='segment') { runSegment(); }
   if (id==='purchase') renderPurchase();
 }
@@ -1942,6 +1968,55 @@ function exportRewardCSV() {
   dlCSV(rows, 'reward.csv');
 }
 
+// ===== 月間報酬集計 =====
+// 月セレクターの選択肢を availableMonths から作る（初期＝表示中の月）
+function updateRewardMonthSelector() {
+  const sel = document.getElementById('r-month');
+  if (!sel) return;
+  const cur = sel.value ? parseInt(sel.value) : curMonth;
+  // ※「＋月を追加」オプションは入れない（集計用セレクターのため）
+  sel.innerHTML = availableMonths.map(m=>`<option value="${m}" ${m===cur?'selected':''}>${m}月</option>`).join('');
+}
+
+// 選択月の報酬（各メンバーの該当週数×1,000円）を集計して表示
+function renderRewardMonthly() {
+  const sel = document.getElementById('r-month');
+  const month = sel && sel.value ? parseInt(sel.value) : curMonth;
+  const rows = [];
+  let total = 0;
+  MEMBERS.forEach(m => {
+    const cnt = getMonthlyRewardCount(m.id, month);
+    if (cnt > 0) { const amt = cnt*1000; total += amt; rows.push({m, cnt, amt}); }
+  });
+  rows.sort((a,b)=> b.cnt - a.cnt || (a.m.line_name > b.m.line_name ? 1 : -1));
+  const nWeeks = rows.reduce((s,r)=>s+r.cnt, 0);
+  document.getElementById('rm-people').textContent = rows.length;
+  document.getElementById('rm-count').textContent = nWeeks;
+  document.getElementById('rm-total').textContent = '¥'+total.toLocaleString();
+  const tbody = document.getElementById('rm-tbody');
+  tbody.innerHTML = rows.length ? rows.map(r=>`
+    <tr>
+      <td class="mono">${r.m.line_name}</td>
+      <td>${r.m.name||'—'}</td>
+      <td>${statusBadge(r.m.status)}</td>
+      <td style="font-family:'DM Mono',monospace;font-weight:600;color:var(--teal2)">${r.cnt}回</td>
+      <td style="font-family:'DM Mono',monospace;font-weight:700;color:var(--gold2)">¥${r.amt.toLocaleString()}</td>
+    </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">対象者なし</td></tr>`;
+}
+
+function exportRewardMonthlyCSV() {
+  const sel = document.getElementById('r-month');
+  const month = sel && sel.value ? parseInt(sel.value) : curMonth;
+  const rows = [['LINE名','氏名','ステータス','対象回数','金額']];
+  let total = 0;
+  MEMBERS.forEach(m => {
+    const cnt = getMonthlyRewardCount(m.id, month);
+    if (cnt > 0) { rows.push([m.line_name, m.name||'', m.status, cnt, cnt*1000]); total += cnt*1000; }
+  });
+  rows.push(['','','','合計', total]);
+  dlCSV(rows, `reward_${month}月.csv`);
+}
+
 // ================================================================
 // ================================================================
 // SEGMENT（強化版・AND条件対応）
@@ -1978,6 +2053,8 @@ const SEG_PRESETS = {
                       customFn: m=>isRestricted(m) && calcPriority(m)==='1:アクティブ'},
   restricted_inactive:{label:'制限中 × 非アクティブ（連絡なし）',
                       customFn: m=>isRestricted(m) && calcPriority(m)!=='1:アクティブ'},
+  restriction_ended: {label:'制限明け（半年経過）',
+                      customFn: m=>isRestrictionEnded(m)},
   // 最終活動日ベース
   no_last_active:    {label:'最終活動日なし（引き継ぎ前・未確認）',
                       customFn: m=>(!m.last_active || String(m.last_active).replace(/[^0-9]/g,'').length < 8) && !m.won1 && !m.won2 && !m.won3},
@@ -2026,6 +2103,7 @@ function runSegment() {
     if (fStatus && m.status !== fStatus) return false;
     if (fPriority && calcPriority(m) !== fPriority) return false;
     if (fRestrict === 'restricted' && !isRestricted(m)) return false;
+    if (fRestrict === 'ended' && !isRestrictionEnded(m)) return false;
     if (fRestrict === 'free' && isRestricted(m)) return false;
     if (fNote && !(m.note||'').toLowerCase().includes(fNote)) return false;
     if (fName) {
@@ -2043,7 +2121,7 @@ function runSegment() {
   const conditions = [];
   if (fStatus)     conditions.push({label: `ステータス: ${fStatus}`, color:'var(--teal2)'});
   if (fPriority)   conditions.push({label: `稼働: ${fPriority.replace(/[0-9:]/g,'').trim()}`, color:'var(--blue2)'});
-  if (fRestrict)   conditions.push({label: fRestrict==='restricted'?'制限中のみ':'制限なしのみ', color:'var(--amber)'});
+  if (fRestrict)   conditions.push({label: fRestrict==='restricted'?'制限中のみ':fRestrict==='ended'?'制限明けのみ':'制限なしのみ', color:'var(--amber)'});
   if (fNote)       conditions.push({label: `備考: "${fNote}"`, color:'var(--purple)'});
   if (fName)       conditions.push({label: `名前: "${fName}"`, color:'var(--text2)'});
   if (fActiveFrom) conditions.push({label: `活動日: ${fmtDate(fActiveFrom)}以降`, color:'var(--green)'});
@@ -2465,7 +2543,9 @@ function setupAutoBackup() {
 // ================================================================
 // ================================================================
 // 当月報酬回数カウント
-// 報酬発生条件：result_ss=true かつ won_date=null かつ（未当選 or no_purchase=true）
+// 報酬発生条件：その週が result_ss=true かつ won_date=null（＝結果SS確認済みで、その週は当選なし）
+// ※現在ステータスでは足切りしない＝月の途中で当選した人の「当選する前の週」も報酬に数える
+//   （当選した週は won_date が入るので自動的に除外される）
 // ================================================================
 // 一度でも抽選申し込みをしたことがあるか判定
 // WEEKLY に apply > 0 または result_ss/won_date があれば参加経験あり
@@ -2480,11 +2560,7 @@ function hasAnyApplyHistory(memberId) {
 }
 
 function getMonthlyRewardCount(memberId, month) {
-  const m = MEMBERS.find(m=>m.id===memberId);
-  if (!m) return 0;
-  // 報酬対象者かどうか（未当選 or 購入なしフラグ）
-  const isEligibleMember = m.status === '未当選' || m.no_purchase === true;
-  if (!isEligibleMember) return 0;
+  // 現在ステータスに依存せず、その月に「結果SS確認済み かつ 当選なし」だった週数を数える
   let count = 0;
   Object.keys(WEEKLY).forEach(key => {
     const parts = key.split('-');
@@ -2528,6 +2604,16 @@ function isRestricted(m) {
   const release = new Date(d);
   release.setMonth(release.getMonth() + 6);
   return new Date() < release;
+}
+
+// 制限明け判定：買付/当選から6ヶ月の解除日を過ぎている（＝過去に制限対象で、いま半年経過済み）
+// 買付・当選の履歴が無い人／購入なしフラグの人は false（そもそも制限対象外）＝ isRestricted の補集合
+function isRestrictionEnded(m) {
+  const d = parseDateStr(getLastPurchaseSuccessDate(m));
+  if (!d) return false;
+  const release = new Date(d);
+  release.setMonth(release.getMonth() + 6);
+  return new Date() >= release;
 }
 
 function getLastPurchaseSuccessDate(m) {
