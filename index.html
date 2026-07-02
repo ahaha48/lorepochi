@@ -2559,16 +2559,36 @@ function hasAnyApplyHistory(memberId) {
   });
 }
 
+// メンバーの最初の当選日（YYYYMMDD）を返す。当選歴が無ければ null
+function earliestWonDate(m) {
+  const ds = [m.won1, m.won2, m.won3]
+    .filter(Boolean)
+    .map(x => String(x).replace(/[^0-9]/g,'').slice(0,8))
+    .filter(x => x.length === 8);
+  return ds.length ? ds.sort()[0] : null;
+}
+
 function getMonthlyRewardCount(memberId, month) {
-  // 現在ステータスに依存せず、その月に「結果SS確認済み かつ 当選なし」だった週数を数える
+  const m = MEMBERS.find(mm => mm.id === memberId);
+  if (!m) return 0;
+  // 一度でも当選した人は、最初の当選日以降の週は報酬なし（当選前の週のみ報酬）
+  // ただし「購入なし（当選したが買えなかった）」の人は当選後も報酬継続（firstWin=null）
+  const firstWin = m.no_purchase ? null : earliestWonDate(m);
   let count = 0;
   Object.keys(WEEKLY).forEach(key => {
     const parts = key.split('-');
     if (parts.length < 3) return;
-    if (parseInt(parts[0]) !== month) return;
+    const mo = parseInt(parts[0]), wk = parseInt(parts[1]);
+    if (mo !== month) return;
     if (parseInt(parts[2]) !== memberId) return;
     const w = WEEKLY[key];
-    if (w && w.result_ss && !w.won_date) count++;
+    if (!(w && w.result_ss && !w.won_date)) return;
+    // 当選日以降の週は除外（その週の水曜日が最初の当選日以降なら報酬なし）
+    if (firstWin) {
+      const wed = getSelectedWeekWednesday(mo, wk);
+      if (wed && wed >= firstWin) return;
+    }
+    count++;
   });
   return count;
 }
@@ -2642,13 +2662,14 @@ function getLastPurchaseSuccessDate(m) {
   }
   // 4. 「購入なし」フラグが立っている場合は制限なし
   if (m.no_purchase) return null;
-  // 5. 上記のいずれもない場合：当選日をフォールバックとして使用
-  // 購入日が不明でも「当選した≒購入した」として制限を計算
-  if (!latest && (m.won1 || m.won2 || m.won3)) {
-    const latestWon = m.won3 || m.won2 || m.won1;
-    const d = String(latestWon).replace(/[^0-9]/g,'').slice(0,8);
-    if (d.length === 8) latest = d;
-  }
+  // 5. 当選日も制限の起算日として考慮する（購入成功日と当選日のうち最も新しい日を採用）
+  // 購入記録が古くても、より新しい当選があればそれを起算日にする
+  // 例：1回目の当選で購入後、2回目の当選で6ヶ月制限がリセットされるケース
+  [m.won1, m.won2, m.won3].forEach(x => {
+    if (!x) return;
+    const d = String(x).replace(/[^0-9]/g,'').slice(0,8);
+    if (d.length === 8 && (!latest || d > latest)) latest = d;
+  });
   return latest;
 }
 
