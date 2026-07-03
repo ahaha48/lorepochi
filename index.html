@@ -2615,7 +2615,8 @@ function getMonthlyRewardCount(memberId, month) {
     if (mo !== month) return;
     if (parseInt(parts[2]) !== memberId) return;
     const w = WEEKLY[key];
-    if (!(w && w.result_ss && !w.won_date)) return;
+    // 参加＝「結果SS確認済み」または「制限中の落選報告(restricted_result='ok')」で、その週に当選していないこと
+    if (!(w && (w.result_ss || w.restricted_result === 'ok') && !w.won_date)) return;
     const ord = mo * 100 + wk;
     let wed = null;
     const blocked = acc.some(a => {
