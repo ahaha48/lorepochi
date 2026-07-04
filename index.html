@@ -518,6 +518,7 @@ select option{background:var(--bg3);}
     <div><div class="page-title">ダッシュボード</div><div class="page-sub" id="today-date"></div></div>
     <button class="btn btn-primary" onclick="showPage('weekly')">📱 LINE入力を開く</button>
   </div>
+  <div id="d-restrict-soon-banner"></div>
   <div class="stats-grid">
     <div class="stat-card gold"><div class="stat-label">総メンバー</div><div class="stat-value" id="d-total">0</div><div class="stat-delta" id="d-active-sub"></div></div>
     <div class="stat-card green"><div class="stat-label">今週 抽選参加</div><div class="stat-value" id="d-participate">0</div><div class="stat-delta" id="d-participate-sub"></div></div>
@@ -770,6 +771,7 @@ select option{background:var(--bg3);}
       <div class="chip" style="color:var(--teal2);" onclick="applyPreset(this,'restricted_active')">制限中 × アクティブ</div>
       <div class="chip" onclick="applyPreset(this,'restricted_inactive')">制限中 × 非アクティブ</div>
       <div class="chip" style="color:var(--green);" onclick="applyPreset(this,'restriction_ended')">✅ 制限明け（180日経過）</div>
+      <div class="chip" style="color:var(--red2);" onclick="applyPreset(this,'restriction_soon')">🔔 まもなく解除（7日以内）</div>
       <div class="chip" style="border-color:rgba(144,144,168,0.5);" onclick="applyPreset(this,'no_last_active')">最終活動日なし</div>
       <div class="chip" onclick="applyPreset(this,'has_last_active')">最終活動日あり</div>
     </div>
@@ -1307,6 +1309,20 @@ function showPage(id) {
 // ================================================================
 function renderDashboard() {
   const all = MEMBERS.length;
+  // 🔔 まもなく制限解除（7日以内）の帯を表示（公式LINEで再開案内する宛先の把握用）
+  const soonList = MEMBERS.filter(m => isRestricted(m) && getRestrictionDaysLeft(m.id) <= 7)
+    .map(m => ({ m, days: getRestrictionDaysLeft(m.id) }))
+    .sort((a, b) => a.days - b.days);
+  const soonBanner = document.getElementById('d-restrict-soon-banner');
+  if (soonBanner) {
+    soonBanner.innerHTML = soonList.length
+      ? `<div style="background:rgba(224,92,110,.10);border:1px solid rgba(224,92,110,.35);border-radius:10px;padding:12px 16px;margin-bottom:16px;">
+           <span style="color:var(--red2);font-weight:700;">🔔 まもなく制限解除（7日以内）：${soonList.length}名</span>
+           <span style="color:var(--text2);font-size:13px;margin-left:10px;">${soonList.map(r=>`${r.m.name||r.m.line_name}（残${r.days}日）`).join(' ／ ')}</span>
+           <span style="color:var(--text3);font-size:12px;margin-left:8px;">→ 公式LINEで再開のご案内を</span>
+         </div>`
+      : '';
+  }
   const active = MEMBERS.filter(m=>calcPriority(m)==='1:アクティブ').length;
   document.getElementById('d-total').textContent = all;
   document.getElementById('d-active-sub').textContent = `アクティブ ${active} 名（最終活動30日以内）`;
@@ -2055,6 +2071,8 @@ const SEG_PRESETS = {
                       customFn: m=>isRestricted(m) && calcPriority(m)!=='1:アクティブ'},
   restriction_ended: {label:'制限明け（180日経過）',
                       customFn: m=>isRestrictionEnded(m)},
+  restriction_soon:  {label:'まもなく制限解除（7日以内）',
+                      customFn: m=>isRestricted(m) && getRestrictionDaysLeft(m.id) <= 7},
   // 最終活動日ベース
   no_last_active:    {label:'最終活動日なし（引き継ぎ前・未確認）',
                       customFn: m=>(!m.last_active || String(m.last_active).replace(/[^0-9]/g,'').length < 8) && !m.won1 && !m.won2 && !m.won3},
@@ -2861,23 +2879,29 @@ function renderPurchaseAll() {
 }
 
 function renderPurchaseRestriction() {
-  const today = new Date();
   const tbody = document.getElementById('purchase-restriction-body');
-  const restricted = MEMBERS.filter(m => isRestricted(m));
+  // 解除が近い順に並べる
+  const restricted = MEMBERS.filter(m => isRestricted(m))
+    .map(m => ({ m, days: getRestrictionDaysLeft(m.id) }))
+    .sort((a, b) => a.days - b.days);
   if (!restricted.length) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text3)">制限中のメンバーはいません</td></tr>';
     return;
   }
-  tbody.innerHTML = restricted.map(m => {
+  const soon = restricted.filter(r => r.days <= 7); // まもなく解除（7日以内）
+  const summary = soon.length
+    ? `<tr><td colspan="6" style="padding:11px 14px;background:rgba(224,92,110,.10);color:var(--red2);font-size:13px;font-weight:600;">🔔 まもなく制限解除（7日以内）：${soon.length}名 … ${soon.map(r=>`${r.m.name||r.m.line_name}（残${r.days}日）`).join('、')}</td></tr>`
+    : '';
+  tbody.innerHTML = summary + restricted.map(({ m, days }) => {
     const lastDate = getLastPurchaseDate(m.id);
     const relDate = getRestrictionReleaseDate(m.id);
-    const days = getRestrictionDaysLeft(m.id);
-    return `<tr>
-      <td class="mono">${m.line_name}</td>
+    const isSoon = days <= 7;
+    return `<tr style="${isSoon?'background:rgba(224,92,110,.06)':''}">
+      <td class="mono">${isSoon?'🔔 ':''}${m.line_name}</td>
       <td>${m.name||'—'}</td>
       <td style="color:var(--gold2);font-size:12px">${fmtDate(lastDate)}</td>
       <td style="color:var(--amber);font-size:12px">${fmtDate(relDate)}</td>
-      <td><span class="badge badge-orange">残${days}日</span></td>
+      <td><span class="badge ${isSoon?'badge-red':'badge-orange'}">残${days}日</span></td>
       <td><span class="badge badge-blue">同行者モード</span></td>
     </tr>`;
   }).join('');
