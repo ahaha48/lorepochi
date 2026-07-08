@@ -1340,7 +1340,7 @@ function renderDashboard() {
     const venue = parseInt(document.getElementById('venue-count')?.value||5);
     if (w.apply>=venue) applied++;
     if (w.won_date) winners++;
-    if (w.result_ss && !w.won_date) rewardCount++;
+    if (w.result_ss && !w.won_date && (w.apply||0) >= 5) rewardCount++;
     if (isParticipating(curMonth, curWeek, m.id)) participating++;
   });
   const activeCount = MEMBERS.filter(m=>m.priority==='1:アクティブ').length;
@@ -1449,7 +1449,7 @@ function buildWeeklyRows(filter) {
   if (f==='active')             list = list.filter(m=>calcPriority(m)==='1:アクティブ');
   else if (f==='apply_pending') list = list.filter(m=>!isRestricted(m) && getWk(curMonth,curWeek,m.id).apply==null);
   else if (f==='ss_pending')    list = list.filter(m=>!isRestricted(m) && !getWk(curMonth,curWeek,m.id).result_ss);
-  else if (f==='reward_eligible') list = list.filter(m=>{const w=getWk(curMonth,curWeek,m.id);return w.result_ss&&!w.won_date;});
+  else if (f==='reward_eligible') list = list.filter(m=>{const w=getWk(curMonth,curWeek,m.id);return w.result_ss&&!w.won_date&&(w.apply||0)>=5;});
   // 全員表示(all)はそのまま全件
 
   document.getElementById('weekly-count').textContent = `${list.length} 名表示中`;
@@ -1466,6 +1466,7 @@ function buildWeeklyRows(filter) {
     const ssOk = w.result_ss;
     const isWon = !!w.won_date;
     const eligible = ssOk && !isWon && m.status!=='2回当選済' && m.status!=='3回当選済';
+    const rewardEligible = eligible && (w.apply||0) >= 5;  // 参加報酬バッジ用：5店舗以上に応募が必須（当選ボタンのeligibleとは別）
 
     // 制限中メンバーの行（申込あり／結果あり／当選連絡あり の3ボタン）
     if (restricted) {
@@ -1554,7 +1555,7 @@ function buildWeeklyRows(filter) {
           : `<button class="won-btn ${eligible?'':'disabled'}" onclick="openWonModal(${m.id})"
               ${eligible?'':'title="結果SSが未確認または既に2回当選済み"'}>おめでとう 🎉</button>`
         }
-        ${eligible?`<span class="badge badge-gold btn-xs" style="margin-left:4px">報酬対象</span>`:''}
+        ${rewardEligible?`<span class="badge badge-gold btn-xs" style="margin-left:4px">報酬対象</span>`:''}
         ${(()=>{
           const isRewardMember = m.status==='未当選' || m.no_purchase===true;
           if (!isRewardMember) return '';
@@ -1940,7 +1941,7 @@ function renderReward() {
   let eligible=0, total=0, paid=0;
   const list = MEMBERS.map(m=>{
     const w = getWk(curMonth, curWeek, m.id);
-    const isEligible = w.result_ss && !w.won_date;
+    const isEligible = w.result_ss && !w.won_date && (w.apply||0) >= 5;
     const amt = isEligible ? 1000 : 0;
     if (isEligible) { eligible++; total+=1000; }
     return {...m, _w:w, _eligible:isEligible, _amt:amt, _paid:false};
@@ -1978,7 +1979,7 @@ function exportRewardCSV() {
   const rows = [['LINE名','氏名','ステータス','申込数','結果SS','当選','報酬額']];
   MEMBERS.forEach(m=>{
     const w = getWk(curMonth, curWeek, m.id);
-    const eligible = w.result_ss && !w.won_date;
+    const eligible = w.result_ss && !w.won_date && (w.apply||0) >= 5;
     if (eligible) rows.push([m.line_name,m.name,m.status,w.apply||0,'✓',w.won_date?'当選':'—',1000]);
   });
   dlCSV(rows, 'reward.csv');
@@ -2633,8 +2634,8 @@ function getMonthlyRewardCount(memberId, month) {
     if (mo !== month) return;
     if (parseInt(parts[2]) !== memberId) return;
     const w = WEEKLY[key];
-    // 参加＝「結果SS確認済み」または「制限中の落選報告(restricted_result='ok')」で、その週に当選していないこと
-    if (!(w && (w.result_ss || w.restricted_result === 'ok') && !w.won_date)) return;
+    // 参加報酬＝「5店舗以上に応募」かつ「結果SS確認済み」かつ「その週に当選していない」。制限中会員(落選)は参加報酬の対象外
+    if (!(w && w.result_ss && !w.won_date && (w.apply||0) >= 5)) return;
     const ord = mo * 100 + wk;
     let wed = null;
     const blocked = acc.some(a => {
