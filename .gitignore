@@ -13,6 +13,11 @@ lorepochi_v5.html
 *.heic
 スクリーンショット*
 
+# 画面収録・会員向けPDF（個人情報を含む可能性があるため除外）
+*.mp4
+*.mov
+*.pdf
+
 # 引き継ぎ仕様書（内部情報のため公開しない）
 lorepochi_spec.md
 
