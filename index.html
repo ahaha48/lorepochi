@@ -3085,8 +3085,9 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 let supabaseClient = null;
 
 // ===== バージョンガード（古いタブが新版デプロイ後に上書きするのを防ぐ＝楽観ロック）=====
-const APP_VERSION = 20260630; // デプロイのたびに増やす
+const APP_VERSION = 20261002; // デプロイのたびに増やす
 let staleCode = false;
+let dataVersion = null, guardBusy = false; // 最後に確認したデータ更新番号／確認の二重実行防止
 function showStaleBanner(){
   if(document.getElementById('stale-banner')) return;
   const d=document.createElement('div'); d.id='stale-banner';
@@ -3094,23 +3095,39 @@ function showStaleBanner(){
   d.innerHTML='⚠ 新しいバージョンが公開されています。このタブは古いため、データを守るために保存を停止しました。 <button onclick="location.reload()" style="margin-left:8px;padding:5px 14px;border:none;border-radius:6px;background:#fff;color:#c0392b;font-weight:700;cursor:pointer">今すぐ再読み込み</button>';
   document.body.appendChild(d);
 }
+// 1リクエストで「版数(__guard__)」と「データ更新番号(__data__)」を同時に確認する。
+// __data__ は DB 側トリガ（version_poll_migration.sql）が保存のたびに進める。番号が変わったら再読み込み。
 async function checkGuard(){
-  if(!supabaseClient) return;
+  if(!supabaseClient || guardBusy) return;
+  guardBusy = true;
   try{
-    const {data,error}=await supabaseClient.from('app_config').select('cur_month').eq('key','__guard__').maybeSingle();
+    const {data,error}=await supabaseClient.from('app_config').select('key,cur_month').in('key',['__guard__','__data__']);
     if(error) return; // 通信エラー時はブロックしない
-    const dbv=(data&&data.cur_month)||0;
+    const row=k=>(data||[]).find(r=>r.key===k);
+    const dbv=(row('__guard__')||{}).cur_month||0;
     if(dbv>APP_VERSION){ staleCode=true; showStaleBanner(); }
     else if(dbv<APP_VERSION){ await supabaseClient.from('app_config').upsert({key:'__guard__',cur_month:APP_VERSION},{onConflict:'key'}); }
+    const dr=row('__data__');
+    if(!dr){ if(dataVersion===null) console.warn('app_config に __data__ 行がありません（version_poll_migration.sql 未実行）'); return; }
+    const dv=dr.cur_month||0;
+    if(dataVersion===null) dataVersion=dv;                          // 初回は基準を取るだけ
+    else if(dv!==dataVersion){ dataVersion=dv; scheduleRtSync(); }  // 誰かの保存を検知 → 再読み込み
   }catch(e){}
+  finally{ guardBusy=false; }
+}
+// 60秒ごとに確認。非表示タブは休止し、表示に戻った瞬間に1回確認する（通信量を抑える）
+function startPolling(){
+  const tick=()=>{ if(!document.hidden) checkGuard(); };
+  tick(); setInterval(tick, 60000);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkGuard(); });
 }
 
 // ===================================================================
-// 同時編集の安全化: 行単位の個別保存 + リアルタイム同期（ロレクエと同方式）
+// 同時編集の安全化: 行単位の個別保存 + 更新番号ポーリングによる再読み込み（ロレクエと同方式）
 // ===================================================================
 let liveData = false;        // 認証済み＆接続OK時のみ true → 個別保存を実行
-let pendingSaves = 0;        // 自分の保存が進行中 → realtime再取得を保留
-let rtChannel = null, rtTimer = null, lastLocalEdit = 0;
+let pendingSaves = 0;        // 自分の保存が進行中 → 再取得を保留
+let rtTimer = null, lastLocalEdit = 0;
 
 // localStorage への静かな退避（旧 saveAll のローカル部分。全DB上書きはしない）
 function localSnapshot(){
@@ -3238,15 +3255,7 @@ async function sbConfig(){
 // 週次入力後のまとめ: ローカル退避 + 該当行 + メンバー(last_active等)を保存
 function afterWeeklyEdit(mid){ localSnapshot(); sbWeekly(curMonth,curWeek,mid); sbMember(mid); }
 
-// ===== リアルタイム同期（他スタッフの入力を全員の画面へ即反映）=====
-function startRealtime(){
-  if(!supabaseClient || !liveData || rtChannel) return;
-  rtChannel = supabaseClient.channel('lorepochi-rt');
-  ['weekly_inputs','members','win_history','purchase_results','store_purchases'].forEach(t=>{
-    rtChannel.on('postgres_changes',{event:'*',schema:'public',table:t}, scheduleRtSync);
-  });
-  rtChannel.subscribe(status=>{ if(status==='SUBSCRIBED') toast('🟢 リアルタイム同期を開始しました'); });
-}
+// ===== 再読み込み（他スタッフの入力を画面へ反映。更新番号の変化を checkGuard が検知して呼ぶ）=====
 function scheduleRtSync(){ clearTimeout(rtTimer); rtTimer=setTimeout(rtSync, 1800); }
 async function rtSync(){
   if(!liveData || staleCode) return;
@@ -3500,6 +3509,7 @@ async function initApp() {
   showApp();
 
   // 4. データ読み込み（Supabase → localStorage フォールバック → 初期データ）
+  await checkGuard(); // 先に更新番号の基準を取る（読み込み中に入った他人の保存を取りこぼさない）
   const supaLoaded = await loadFromSupabase();
 
   if (!supaLoaded) {
@@ -3556,11 +3566,8 @@ async function initApp() {
   // 9. 自動バックアップ開始
   setupAutoBackup();
 
-  // 10. バージョンガード（古いタブの上書き防止）
-  checkGuard(); setInterval(checkGuard, 30000);
-
-  // 11. リアルタイム同期開始（他スタッフの入力を全員の画面へ即反映）
-  startRealtime();
+  // 10. バージョンガード＋更新番号ポーリング（古いタブの上書き防止／他スタッフの入力を最長60秒で反映）
+  startPolling();
 }
 
 // アプリ起動
